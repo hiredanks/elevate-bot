@@ -26,6 +26,7 @@ async function main() {
   // Started before login so Render's health check passes while the old instance is shutting down.
   const server = createApi(client, modules).listen(config.port, () => logger.info(`HTTP listening on port ${config.port}`));
   if (!config.clientSecret || !config.dashboardUrl) logger.warn('DISCORD_CLIENT_SECRET or DASHBOARD_URL is not set, so website login is off.');
+  else logger.info(`Website login is on for ${config.dashboardUrl}. Discord's OAuth2 > Redirects must list ${config.publicUrl}/auth/callback`);
 
   let stopping = false;
   const shutdown = async (signal) => {
