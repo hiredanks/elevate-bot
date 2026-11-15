@@ -161,6 +161,10 @@ export function explainDatabaseError(err, databaseUrl) {
   } catch {
     return 'DATABASE_URL is not a valid address. In Supabase press Connect, choose "Session pooler", and copy that address again.';
   }
+  const projectRef = host.match(/^([a-z0-9]{15,30})\.supabase\.co$/i)?.[1];
+  if (projectRef) {
+    return `DATABASE_URL uses your Supabase project's website address (${host}), which is not a database. In Supabase press Connect, choose "Session pooler", and paste that address on Render. Its user is postgres.${projectRef} and its host ends in pooler.supabase.com.`;
+  }
   if (/^db\.[a-z0-9]+\.supabase\.co$/i.test(host)) {
     return `DATABASE_URL uses Supabase's "Direct connection" (${host}). It only works over IPv6, which Render cannot use. In Supabase press Connect, choose "Session pooler", and paste that address on Render instead. Its host ends in pooler.supabase.com.`;
   }
