@@ -324,15 +324,17 @@ export function createApi(client, modules) {
     }
     if (url.pathname === '/auth/callback') {
       const code = url.searchParams.get('code');
-      const failed = () => redirect(res, `${config.dashboardUrl}/#login_error=1`);
-      if (!code || !STATE_RE.test(state)) return failed();
+      // The reason lets the website say what went wrong instead of a vague "try again".
+      const failed = (reason) => redirect(res, `${config.dashboardUrl}/#login_error=${reason}`);
+      if (url.searchParams.get('error')) return failed('denied');
+      if (!code || !STATE_RE.test(state)) return failed('other');
       try {
         const token = await createSession(await exchangeCode(client.user.id, code));
         // In the fragment, so the token is never sent to a server or written to access logs.
         return redirect(res, `${config.dashboardUrl}/#token=${token}&state=${encodeURIComponent(state)}`);
       } catch (err) {
         logger.warn(`Website login failed: ${err.message}`);
-        return failed();
+        return failed(err.reason ?? 'other');
       }
     }
     throw new HttpError(404, 'Not found.');
