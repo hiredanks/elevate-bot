@@ -14,6 +14,26 @@ const redirectUri = () => `${config.publicUrl}/auth/callback`;
 
 export const authConfigured = () => Boolean(config.clientSecret && config.dashboardUrl);
 
+/** A login that failed for a known reason. `reason` is shown on the website as a plain instruction. */
+export class LoginError extends Error {
+  constructor(reason, message) {
+    super(message);
+    this.reason = reason;
+  }
+}
+
+async function tokenError(res) {
+  const body = await res.json().catch(() => ({}));
+  const detail = `${body.error ?? ''} ${body.error_description ?? ''}`.trim();
+  if (res.status === 401 || body.error === 'invalid_client') {
+    return new LoginError('secret', "Discord rejected DISCORD_CLIENT_SECRET. Copy the Client Secret from this bot's app in the Discord Developer Portal (OAuth2 page), paste it on Render, and redeploy.");
+  }
+  if (/redirect_uri/i.test(detail)) return new LoginError('redirect', `Discord rejected the redirect. Add ${redirectUri()} under OAuth2 > Redirects in the Discord Developer Portal.`);
+  if (body.error === 'invalid_grant') return new LoginError('expired', 'The Discord login code expired or was already used.');
+  if (res.status === 429 || res.status >= 500) return new LoginError('busy', `Discord answered ${res.status}, so it is busy or limiting this server.`);
+  return new LoginError('other', `Token exchange failed with ${res.status} ${detail}`.trim());
+}
+
 export function authorizeUrl(clientId, state) {
   const params = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri(), response_type: 'code', scope: 'identify guilds', state, prompt: 'none' });
   return `https://discord.com/oauth2/authorize?${params}`;
@@ -33,7 +53,7 @@ export async function exchangeCode(clientId, code) {
     body: new URLSearchParams({ client_id: clientId, client_secret: config.clientSecret, grant_type: 'authorization_code', code, redirect_uri: redirectUri() }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!res.ok) throw new Error(`Token exchange failed with ${res.status}`);
+  if (!res.ok) throw await tokenError(res);
   const { access_token: accessToken } = await res.json();
   const [user, guilds] = await Promise.all([discordJson('/users/@me', accessToken), discordJson('/users/@me/guilds', accessToken)]);
   return {
