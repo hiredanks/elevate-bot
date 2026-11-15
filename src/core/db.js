@@ -153,10 +153,37 @@ function tlsOption() {
   return isLocal || url.searchParams.has('sslmode') ? undefined : { rejectUnauthorized: false };
 }
 
+/** Turns a failed first connection into a plain instruction. Only the host is ever shown, never the password. */
+export function explainDatabaseError(err, databaseUrl) {
+  let host;
+  try {
+    host = new URL(databaseUrl).hostname;
+  } catch {
+    return 'DATABASE_URL is not a valid address. In Supabase press Connect, choose "Session pooler", and copy that address again.';
+  }
+  if (/^db\.[a-z0-9]+\.supabase\.co$/i.test(host)) {
+    return `DATABASE_URL uses Supabase's "Direct connection" (${host}). It only works over IPv6, which Render cannot use. In Supabase press Connect, choose "Session pooler", and paste that address on Render instead. Its host ends in pooler.supabase.com.`;
+  }
+  const detail = `${err.code ?? ''} ${err.message ?? ''}`;
+  if (err.code === '28P01' || /password authentication failed/i.test(detail)) {
+    return 'The password in DATABASE_URL is wrong. In Supabase, reset it under Project Settings > Database, then paste the new address on Render.';
+  }
+  if (/tenant or user not found/i.test(detail)) {
+    return 'Supabase did not recognise the user in DATABASE_URL. Copy the "Session pooler" address again: its user looks like postgres.abcdefghijkl, not just postgres.';
+  }
+  if (/ENOTFOUND|EAI_AGAIN/.test(detail)) return `The database host ${host} does not exist. Copy DATABASE_URL again from Supabase.`;
+  if (/timeout|ETIMEDOUT|ENETUNREACH|ECONNREFUSED|EHOSTUNREACH/i.test(detail)) {
+    return `Could not reach the database at ${host}. Check DATABASE_URL on Render, and that the Supabase project is not paused.`;
+  }
+  return `The database refused to connect: ${err.message}`;
+}
+
 function pgDriver() {
   pg.types.setTypeParser(INT8_OID, Number);
   const pool = new pg.Pool({
     connectionString: config.databaseUrl, ssl: tlsOption(), max: Number(process.env.PG_POOL_MAX) || 8, idleTimeoutMillis: 30_000,
+    // Fail in seconds with a clear message instead of hanging until Render gives up.
+    connectionTimeoutMillis: 20_000,
   });
   // Hosted Postgres closes idle connections; without this listener that would crash the process.
   pool.on('error', (err) => logger.warn('Postgres idle connection error:', err.message));
@@ -211,8 +238,24 @@ export async function connectDatabase() {
   if (!config.databaseUrl && config.onRender) {
     throw new Error('DATABASE_URL is not set. Render erases local files on every deploy, so a hosted Postgres database is required.');
   }
-  driver = config.databaseUrl ? pgDriver() : await liteDriver();
-  await driver.script(SCHEMA);
+  if (!config.databaseUrl) {
+    driver = await liteDriver();
+    await driver.script(SCHEMA);
+    return;
+  }
+  let host = 'an invalid address';
+  try {
+    host = new URL(config.databaseUrl).hostname;
+  } catch { /* explained below */ }
+  logger.info(`Connecting to the database at ${host}...`);
+  driver = pgDriver();
+  try {
+    await driver.script(SCHEMA);
+  } catch (err) {
+    await driver.close().catch(() => {});
+    driver = null;
+    throw new Error(explainDatabaseError(err, config.databaseUrl));
+  }
 }
 
 export async function closeDatabase() {
